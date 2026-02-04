@@ -212,25 +212,24 @@ if mode == "清掃":
 
                     # 返り値がまだ来ていない場合（コンポーネント処理中/ネットワーク制限など）
                     if img_bytes and pred is None:
-                        pass
+                        # 4秒以上返ってこない場合はエラー扱い（Streamlit Cloudの遅延/ブロック対策）
+                        now_ts = time.time()
+                        pend = st.session_state.pred_pending.get(tid)
+                        if (not pend) or (pend.get("hash") != img_hash):
+                            st.session_state.pred_pending[tid] = {"hash": img_hash, "since": now_ts}
+                            pend = st.session_state.pred_pending[tid]
+                        elapsed = now_ts - float(pend.get("since", now_ts))
 
-                    now_ts = time.time()
-                    pend = st.session_state.pred_pending.get(tid)
-                    if (not pend) or (pend.get("hash") != img_hash):
-                    st.session_state.pred_pending[tid] = {"hash": img_hash, "since": now_ts}
-                    pend = st.session_state.pred_pending[tid]
-                    elapsed = now_ts - float(pend.get("since", now_ts))
-
-                    if elapsed >= 4.0:
-                    pred = {"error": "timeout"}
-                    st.session_state.pred_pending.pop(tid, None)
-                    st.error("判定が4秒以上続いたためタイムアウトしました。通信制限やCDNブロックの可能性があります。")
-                    else:
-                    st.info("判定中です（最大4秒）。反映されない場合は「再判定」を押してください。")
-                    if st.button("🔄 再判定", key=f"retry_{tid}", use_container_width=True):
-                    st.session_state.pred_nonce[tid] = st.session_state.pred_nonce.get(tid, 0) + 1
-                    st.session_state.pred_pending[tid] = {"hash": img_hash, "since": time.time()}
-                    st.rerun()
+                        if elapsed >= 4.0:
+                            pred = {"error": "timeout"}
+                            st.session_state.pred_pending.pop(tid, None)
+                            st.error("判定が4秒以上続いたためタイムアウトしました。通信制限やCDNブロックの可能性があります。")
+                        else:
+                            st.info("判定中です（最大4秒）。反映されない場合は「再判定」を押してください。")
+                            if st.button("🔄 再判定", key=f"retry_{tid}", use_container_width=True):
+                                st.session_state.pred_nonce[tid] = st.session_state.pred_nonce.get(tid, 0) + 1
+                                st.session_state.pred_pending[tid] = {"hash": img_hash, "since": time.time()}
+                                st.rerun()
 
                     # 判定結果表示＆状態更新
                     if isinstance(pred, dict) and pred.get("error"):
