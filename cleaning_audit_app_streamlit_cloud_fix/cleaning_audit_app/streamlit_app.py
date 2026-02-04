@@ -30,6 +30,18 @@ FIX_CLASS = "bad"
 
 st.set_page_config(page_title="清掃・監査 統合（Streamlit）", page_icon="🧹", layout="wide")
 
+
+
+# --- Session init (MUST be before any pred_pending access) ---
+if "pred_pending" not in st.session_state:
+    st.session_state.pred_pending = {}   # tid -> {"started": float, "nonce": int, ...}
+
+if "pred_nonce" not in st.session_state:
+    st.session_state.pred_nonce = 0
+
+if "pred_last" not in st.session_state:
+    st.session_state.pred_last = {}      # tid -> last pred (optional)
+# -------------------------------------------------------------
 # ===== 管理者パスワード（直書き禁止）=====
 # Streamlit Community Cloud では Secrets に ADMIN_PASSWORD を設定してください。
 # ローカル開発時に限り、未設定なら暫定で 1111 を許可（UIには表示しない）
@@ -214,7 +226,7 @@ if mode == "清掃":
                     if img_bytes and pred is None:
                         # 4秒以上返ってこない場合はエラー扱い（Streamlit Cloudの遅延/ブロック対策）
                         now_ts = time.time()
-                        pend = st.session_state.pred_pending.get(tid)
+                        pend = st.session_state.pred_pending.get(tid, None)
                         if (not pend) or (pend.get("hash") != img_hash):
                             st.session_state.pred_pending[tid] = {"hash": img_hash, "since": now_ts}
                             pend = st.session_state.pred_pending[tid]
