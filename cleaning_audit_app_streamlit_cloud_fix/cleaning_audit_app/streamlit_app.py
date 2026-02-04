@@ -31,8 +31,6 @@ if "pred_last" not in st.session_state:
 # frontend/ が無い環境でも動くように自動判定します。
 _component_base = (Path(__file__).parent / "tm_classifier_component").resolve()
 _component_path = (
-    _component_base / "frontend"
-    if (_component_base / "frontend").is_dir()
     else _component_base
 )
 
