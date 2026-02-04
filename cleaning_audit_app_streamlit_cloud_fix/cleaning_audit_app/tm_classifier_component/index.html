@@ -3,9 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <script src="https://unpkg.com/streamlit-component-lib@1.6.0/dist/streamlit-component-lib.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-  <style>
+<style>
     body { margin: 0; padding: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
     .wrap { padding: 10px; }
     .row { display:flex; gap:10px; align-items:center; }
@@ -15,6 +13,66 @@
     .bad { border-color:#f0b6b6; }
     img { max-width: 100%; border-radius: 10px; border: 1px solid #e5e5e5; }
   </style>
+
+  <script>
+  // --- Minimal Streamlit Component shim (no external streamlit-component-lib) ---
+  (function(){
+    const callbacks = [];
+    function post(message){
+      window.parent.postMessage(Object.assign({isStreamlitMessage: true}, message), "*");
+    }
+    window.Streamlit = {
+      setComponentReady: function(){ post({type: "streamlit:componentReady"}); },
+      setComponentValue: function(value){ post({type: "streamlit:setComponentValue", value}); },
+      setFrameHeight: function(height){ post({type: "streamlit:setFrameHeight", height}); },
+      events: {
+        addEventListener: function(type, cb){
+          if(type === "streamlit:render") callbacks.push(cb);
+        }
+      }
+    };
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      if(!data || data.isStreamlitMessage !== true) return;
+      if(data.type === "streamlit:render"){
+        const detail = { args: data.args || {} };
+        callbacks.forEach(cb => { try { cb({detail}); } catch(e){} });
+      }
+    });
+    // ready
+    window.addEventListener("load", () => {
+      Streamlit.setComponentReady();
+      Streamlit.setFrameHeight(120);
+    });
+  })();
+  </script>
+
+  <script>
+  // --- TFJS loader with fallback (Streamlit Cloud / restricted networks) ---
+  async function loadScript(src){
+    return new Promise((resolve, reject)=>{
+      const s=document.createElement('script');
+      s.src=src; s.async=true;
+      s.onload=()=>resolve();
+      s.onerror=()=>reject(new Error("failed:"+src));
+      document.head.appendChild(s);
+    });
+  }
+  async function ensureTfjs(){
+    if (window.tf) return;
+    const urls = [
+      "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js",
+      "https://unpkg.com/@tensorflow/tfjs@4.20.0/dist/tf.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.20.0/tf.min.js"
+    ];
+    let lastErr=null;
+    for(const u of urls){
+      try { await loadScript(u); if(window.tf) return; } catch(e){ lastErr=e; }
+    }
+    throw lastErr || new Error("tfjs load failed");
+  }
+  </script>
+
 </head>
 <body>
   <div class="wrap">
@@ -40,6 +98,7 @@ function b64ToArrayBuffer(b64) {
 }
 
 async function loadModelOnce() {
+  await ensureTfjs();
   if (model) return model;
   if (loadingPromise) return loadingPromise;
 
@@ -124,6 +183,16 @@ async function onRender(event) {
   const args = event.detail.args || {};
   const dataUrl = args.image_data_url || null;
 
+  const TIMEOUT_MS = 4000;
+  let timeoutId = null;
+  function startTimeout(){
+    if(timeoutId) clearTimeout(timeoutId);
+    timeoutId = setTimeout(()=>{
+      try { sendValue({error: 'timeout'}); setStatus('判定タイムアウト'); } catch(e){}
+    }, TIMEOUT_MS);
+  }
+  function clearTimeoutSafe(){ if(timeoutId) { clearTimeout(timeoutId); timeoutId=null; } }
+
   await loadModelOnce();
   setStatus(dataUrl ? "判定中…" : "画像を受け取ると判定します");
   renderPreview(dataUrl, null);
@@ -135,13 +204,16 @@ async function onRender(event) {
   }
 
   try {
+    startTimeout();
     const results = await predictFromDataUrl(dataUrl);
     const top = results[0] || null;
     setStatus("判定完了");
     renderPreview(dataUrl, top);
+    clearTimeoutSafe();
     sendValue(results);
     Streamlit.setFrameHeight(320);
   } catch (e) {
+    clearTimeoutSafe();
     console.error(e);
     setStatus("判定エラー");
     sendValue({ error: String(e) });

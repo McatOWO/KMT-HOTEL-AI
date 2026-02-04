@@ -1,4 +1,5 @@
 import os
+import time
 import hashlib
 import uuid
 from datetime import datetime, timezone
@@ -49,10 +50,25 @@ ADMIN_PASSWORD = get_admin_password()
 _tm = components.declare_component("tm_classifier", path=os.path.join(os.path.dirname(__file__), "tm_classifier_component"))
 
 def classify_image(image_bytes: bytes, key: str) -> Optional[List[Dict[str, Any]]]:
+    """Browser-side TFJS component classification.
+    Streamlit Cloud安定動作のため、入力はPNG DataURLに正規化して渡す。
+    """
     if not image_bytes:
         return None
-    import base64
-    data_url = "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode("ascii")
+
+    # 拡張子/実体の違いに強くするため、PILで開ける場合はPNGへ正規化
+    data_url = None
+    try:
+        from PIL import Image
+        import io, base64
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        # 最終フォールバック（元バイトをそのままjpeg扱いにしない）
+        return {"error": "invalid_image"}
+
     result = _tm(image_data_url=data_url, key=key)
     return result
 
@@ -177,7 +193,7 @@ if mode == "清掃":
                 with colA:
                     img = st.camera_input("写真を撮る", key=f"cam_{tid}")
                     if img is None:
-                        up = st.file_uploader("または画像をアップロード", type=["png", "jpg", "jpeg"], key=f"up_{tid}")
+                        up = st.file_uploader("または画像をアップロード（拡張子不問）", type=None, key=f"up_{tid}")
                         if up is not None:
                             img_bytes = up.read()
                         else:
@@ -195,11 +211,25 @@ if mode == "清掃":
                     info["last_pred"] = pred
 
                     # 返り値がまだ来ていない場合（コンポーネント処理中/ネットワーク制限など）
-                    if img_bytes and pred is None:
-                        st.info("判定中です。数秒待っても反映されない場合は「再判定」を押してください。")
-                        if st.button("🔄 再判定", key=f"retry_{tid}", use_container_width=True):
-                            st.session_state.pred_nonce[tid] = st.session_state.pred_nonce.get(tid, 0) + 1
-                            st.rerun()
+if img_bytes and pred is None:
+    # 4秒以上返ってこない場合はエラー扱い（Streamlit Cloudの遅延/ブロック対策）
+    now_ts = time.time()
+    pend = st.session_state.pred_pending.get(tid)
+    if (not pend) or (pend.get("hash") != img_hash):
+        st.session_state.pred_pending[tid] = {"hash": img_hash, "since": now_ts}
+        pend = st.session_state.pred_pending[tid]
+    elapsed = now_ts - float(pend.get("since", now_ts))
+
+    if elapsed >= 4.0:
+        pred = {"error": "timeout"}
+        st.session_state.pred_pending.pop(tid, None)
+        st.error("判定が4秒以上続いたためタイムアウトしました。通信制限やCDNブロックの可能性があります。")
+    else:
+        st.info("判定中です（最大4秒）。反映されない場合は「再判定」を押してください。")
+        if st.button("🔄 再判定", key=f"retry_{tid}", use_container_width=True):
+            st.session_state.pred_nonce[tid] = st.session_state.pred_nonce.get(tid, 0) + 1
+            st.session_state.pred_pending[tid] = {"hash": img_hash, "since": time.time()}
+            st.rerun()
 
                     # 判定結果表示＆状態更新
                     if isinstance(pred, dict) and pred.get("error"):
