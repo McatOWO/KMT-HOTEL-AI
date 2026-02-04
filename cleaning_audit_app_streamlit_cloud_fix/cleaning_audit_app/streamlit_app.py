@@ -26,10 +26,14 @@ if "pred_last" not in st.session_state:
 # ----------------------------------------------------------
 
 # ---------------- Component declare ----------------
+# Streamlit Cloud では、リポジトリ内に存在する「実在するディレクトリ」を指定する必要があります。
+# 本ZIPでは index.html 等が tm_classifier_component 直下にあるため、
+# frontend/ が無い環境でも動くように自動判定します。
+_component_base = (Path(__file__).parent / "tm_classifier_component").resolve()
 _component_path = (
-    Path(__file__).parent
-    / "tm_classifier_component"
-    / "frontend"
+    _component_base / "frontend"
+    if (_component_base / "frontend").is_dir()
+    else _component_base
 )
 
 tm_classifier = components.declare_component(
