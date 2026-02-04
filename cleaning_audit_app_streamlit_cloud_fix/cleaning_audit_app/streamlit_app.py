@@ -201,94 +201,96 @@ if mode == "清掃":
                     else:
                         img_bytes = img.getvalue()
 
-                with colB:
-                    # 判定（画像がある時だけ実行）
-                    pred = None
-                    if img_bytes:
-                        img_hash = hashlib.sha256(img_bytes).hexdigest()[:8]
-                        nonce = st.session_state.pred_nonce.get(tid, 0)
-                        pred = classify_image(img_bytes, key=f"pred_{tid}_{img_hash}_{nonce}")
-                    info["last_pred"] = pred
+with colB:
+    # 判定（画像がある時だけ実行）
+    pred = None
+    if img_bytes:
+        img_hash = hashlib.sha256(img_bytes).hexdigest()[:8]
+        nonce = st.session_state.pred_nonce.get(tid, 0)
+        pred = classify_image(img_bytes, key=f"pred_{tid}_{img_hash}_{nonce}")
+    info["last_pred"] = pred
 
-                    # 返り値がまだ来ていない場合（コンポーネント処理中/ネットワーク制限など）
-if img_bytes and pred is None:
-    # 4秒以上返ってこない場合はエラー扱い（Streamlit Cloudの遅延/ブロック対策）
-    now_ts = time.time()
-    pend = st.session_state.pred_pending.get(tid)
-    if (not pend) or (pend.get("hash") != img_hash):
-        st.session_state.pred_pending[tid] = {"hash": img_hash, "since": now_ts}
-        pend = st.session_state.pred_pending[tid]
-    elapsed = now_ts - float(pend.get("since", now_ts))
+    # 返り値がまだ来ていない場合（コンポーネント処理中/ネットワーク制限など）
+    if img_bytes and pred is None:
+        # 4秒以上返ってこない場合はエラー扱い（Streamlit Cloudの遅延/ブロック対策）
+        now_ts = time.time()
+        if "pred_pending" not in st.session_state:
+            st.session_state.pred_pending = {}
+        pend = st.session_state.pred_pending.get(tid)
+        if (not pend) or (pend.get("hash") != img_hash):
+            st.session_state.pred_pending[tid] = {"hash": img_hash, "since": now_ts}
+            pend = st.session_state.pred_pending[tid]
+        elapsed = now_ts - float(pend.get("since", now_ts))
 
-    if elapsed >= 4.0:
-        pred = {"error": "timeout"}
-        st.session_state.pred_pending.pop(tid, None)
-        st.error("判定が4秒以上続いたためタイムアウトしました。通信制限やCDNブロックの可能性があります。")
+        if elapsed >= 4.0:
+            pred = {"error": "timeout"}
+            st.session_state.pred_pending.pop(tid, None)
+            st.error("判定が4秒以上続いたためタイムアウトしました。通信制限やCDNブロックの可能性があります。")
+        else:
+            st.info("判定中です（最大4秒）。反映されない場合は「再判定」を押してください。")
+            if st.button("🔄 再判定", key=f"retry_{tid}", use_container_width=True):
+                st.session_state.pred_nonce[tid] = st.session_state.pred_nonce.get(tid, 0) + 1
+                st.session_state.pred_pending[tid] = {"hash": img_hash, "since": time.time()}
+                st.rerun()
+
+    # 判定結果表示＆状態更新
+    if isinstance(pred, dict) and pred.get("error"):
+        st.error("判定に失敗しました。別の画像で再試行してください。")
+        info["status"] = "todo"
+        info["score"] = 0
+    elif isinstance(pred, list) and len(pred) > 0:
+        top = pred[0]
+        cls = str(top.get("className", ""))
+        p = float(top.get("probability", 0.0))
+
+        st.write(f"**判定:** `{cls}`  /  **信頼度:** {round(p*100)}%")
+
+        if cls in OK_CLASSES:
+            info["status"] = "done"
+            info["score"] = t["weight"]
+        else:
+            info["status"] = "fix"
+            info["score"] = 0
+
+        info["checkedAt"] = now_iso()
+
+    # メモ
+    info["notes"] = st.text_area("メモ（任意）", value=info.get("notes",""), key=f"notes_{tid}")
+
+    # ステータス表示
+    if info["status"] == "done":
+        st.success(f"完了 ✅（+{t['weight']}）")
+    elif info["status"] == "fix":
+        st.warning("要修正 ⚠️（bad判定）")
     else:
-        st.info("判定中です（最大4秒）。反映されない場合は「再判定」を押してください。")
-        if st.button("🔄 再判定", key=f"retry_{tid}", use_container_width=True):
-            st.session_state.pred_nonce[tid] = st.session_state.pred_nonce.get(tid, 0) + 1
-            st.session_state.pred_pending[tid] = {"hash": img_hash, "since": time.time()}
-            st.rerun()
+        st.info("未判定 / 未完了")
 
-                    # 判定結果表示＆状態更新
-                    if isinstance(pred, dict) and pred.get("error"):
-                        st.error("判定に失敗しました。別の画像で再試行してください。")
-                        info["status"] = "todo"
-                        info["score"] = 0
-                    elif isinstance(pred, list) and len(pred) > 0:
-                        top = pred[0]
-                        cls = str(top.get("className", ""))
-                        p = float(top.get("probability", 0.0))
+    # 反映
+    st.session_state.tasks_state[tid] = info
 
-                        st.write(f"**判定:** `{cls}`  /  **信頼度:** {round(p*100)}%")
+with right:
+    st.subheader("マップ（参照）")
+    st.image(os.path.join(os.path.dirname(__file__), "static", "room_map.png"), caption="※ピン操作UIは次段階（最小改修のため参照のみ）", use_container_width=True)
 
-                        if cls in OK_CLASSES:
-                            info["status"] = "done"
-                            info["score"] = t["weight"]
-                        else:
-                            info["status"] = "fix"
-                            info["score"] = 0
+    st.divider()
+    st.subheader("レポート出力")
+    disabled_export = not st.session_state.roomId or not st.session_state.cleanerId
+    if disabled_export:
+        st.warning("部屋IDと作業者IDを入力すると、レポート出力できます。")
 
-                        info["checkedAt"] = now_iso()
+    report_text = build_report_text()
+    st.download_button(
+        "⬇ レポートをダウンロード（txt）",
+        data=report_text.encode("utf-8"),
+        file_name=f"cleaning_report_{uuid.uuid4().hex[:8]}.txt",
+        mime="text/plain",
+        use_container_width=True,
+        disabled=disabled_export,
+    )
 
-                    # メモ
-                    info["notes"] = st.text_area("メモ（任意）", value=info.get("notes",""), key=f"notes_{tid}")
-
-                    # ステータス表示
-                    if info["status"] == "done":
-                        st.success(f"完了 ✅（+{t['weight']}）")
-                    elif info["status"] == "fix":
-                        st.warning("要修正 ⚠️（bad判定）")
-                    else:
-                        st.info("未判定 / 未完了")
-
-                # 反映
-                st.session_state.tasks_state[tid] = info
-
-    with right:
-        st.subheader("マップ（参照）")
-        st.image(os.path.join(os.path.dirname(__file__), "static", "room_map.png"), caption="※ピン操作UIは次段階（最小改修のため参照のみ）", use_container_width=True)
-
-        st.divider()
-        st.subheader("レポート出力")
-        disabled_export = not st.session_state.roomId or not st.session_state.cleanerId
-        if disabled_export:
-            st.warning("部屋IDと作業者IDを入力すると、レポート出力できます。")
-
-        report_text = build_report_text()
-        st.download_button(
-            "⬇ レポートをダウンロード（txt）",
-            data=report_text.encode("utf-8"),
-            file_name=f"cleaning_report_{uuid.uuid4().hex[:8]}.txt",
-            mime="text/plain",
-            use_container_width=True,
-            disabled=disabled_export,
-        )
-
-        if st.button("📌 レポートを保存（監査で閲覧）", use_container_width=True, disabled=disabled_export):
-            st.session_state.reports.insert(0, {"savedAt": now_iso(), "content": report_text})
-            st.success("保存しました（監査メニューで確認できます）。")
+    if st.button("📌 レポートを保存（監査で閲覧）", use_container_width=True, disabled=disabled_export):
+        st.session_state.reports.insert(0, {"savedAt": now_iso(), "content": report_text})
+        st.success("保存しました（監査メニューで確認できます）。")
 
 # =============================
 # 監査（管理者）
