@@ -214,6 +214,8 @@ if mode == "清掃":
                     if img_bytes and pred is None:
                         # 4秒以上返ってこない場合はエラー扱い（Streamlit Cloudの遅延/ブロック対策）
                         now_ts = time.time()
+                        if "pred_pending" not in st.session_state:
+                            st.session_state.pred_pending = {}
                         pend = st.session_state.pred_pending.get(tid)
                         if (not pend) or (pend.get("hash") != img_hash):
                             st.session_state.pred_pending[tid] = {"hash": img_hash, "since": now_ts}
