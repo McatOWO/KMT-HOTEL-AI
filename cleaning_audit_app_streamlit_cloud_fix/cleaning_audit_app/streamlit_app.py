@@ -212,7 +212,8 @@ if mode == "清掃":
 
                     # 返り値がまだ来ていない場合（コンポーネント処理中/ネットワーク制限など）
                     if img_bytes and pred is None:
-                    # 4秒以上返ってこない場合はエラー扱い（Streamlit Cloudの遅延/ブロック対策）
+                        pass
+
                     now_ts = time.time()
                     pend = st.session_state.pred_pending.get(tid)
                     if (not pend) or (pend.get("hash") != img_hash):
