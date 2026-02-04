@@ -1,4 +1,5 @@
 import os
+import hashlib
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
@@ -65,6 +66,7 @@ def init_state():
         t["id"]: {"status": "todo", "score": 0, "checkedAt": "", "notes": "", "last_pred": None}
         for t in TASKS
     })
+    st.session_state.setdefault("pred_nonce", {t["id"]: 0 for t in TASKS})
     st.session_state.setdefault("admin_authed", False)
     st.session_state.setdefault("reports", [])  # メモリ内保存（Cloudでも動く）
 
@@ -118,6 +120,7 @@ def reset_cleaning_state():
         t["id"]: {"status": "todo", "score": 0, "checkedAt": "", "notes": "", "last_pred": None}
         for t in TASKS
     }
+    st.session_state.pred_nonce = {t["id"]: 0 for t in TASKS}
 
 # ===== UI =====
 st.title("🧹 清掃・監査（Streamlit移行版）")
@@ -186,8 +189,17 @@ if mode == "清掃":
                     # 判定（画像がある時だけ実行）
                     pred = None
                     if img_bytes:
-                        pred = classify_image(img_bytes, key=f"pred_{tid}")
+                        img_hash = hashlib.sha256(img_bytes).hexdigest()[:8]
+                        nonce = st.session_state.pred_nonce.get(tid, 0)
+                        pred = classify_image(img_bytes, key=f"pred_{tid}_{img_hash}_{nonce}")
                     info["last_pred"] = pred
+
+                    # 返り値がまだ来ていない場合（コンポーネント処理中/ネットワーク制限など）
+                    if img_bytes and pred is None:
+                        st.info("判定中です。数秒待っても反映されない場合は「再判定」を押してください。")
+                        if st.button("🔄 再判定", key=f"retry_{tid}", use_container_width=True):
+                            st.session_state.pred_nonce[tid] = st.session_state.pred_nonce.get(tid, 0) + 1
+                            st.rerun()
 
                     # 判定結果表示＆状態更新
                     if isinstance(pred, dict) and pred.get("error"):
