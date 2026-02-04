@@ -51,8 +51,21 @@ _tm = components.declare_component("tm_classifier", path=os.path.join(os.path.di
 def classify_image(image_bytes: bytes, key: str) -> Optional[List[Dict[str, Any]]]:
     if not image_bytes:
         return None
-    import base64
-    data_url = "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode("ascii")
+import base64
+# Streamlit Cloudでは、アップロードされた画像の拡張子/形式が一定でないため、
+# いったんPILで読み込み、PNGに正規化してからdata URL化する。
+try:
+    from PIL import Image
+    import io
+    im = Image.open(io.BytesIO(image_bytes))
+    im = im.convert("RGB")
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+    data_url = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
+except Exception:
+    # PILで開けない(画像以外など)場合は、元のバイト列をそのまま渡す
+    data_url = "data:application/octet-stream;base64," + base64.b64encode(image_bytes).decode("ascii")
     result = _tm(image_data_url=data_url, key=key)
     return result
 
@@ -177,7 +190,7 @@ if mode == "清掃":
                 with colA:
                     img = st.camera_input("写真を撮る", key=f"cam_{tid}")
                     if img is None:
-                        up = st.file_uploader("または画像をアップロード", type=["png", "jpg", "jpeg"], key=f"up_{tid}")
+                        up = st.file_uploader("または画像をアップロード（画像以外も選べます）", type=None, key=f"up_{tid}")
                         if up is not None:
                             img_bytes = up.read()
                         else:
@@ -186,10 +199,19 @@ if mode == "清掃":
                         img_bytes = img.getvalue()
 
                 with colB:
-                    # 判定（画像がある時だけ実行）
-                    pred = None
-                    if img_bytes:
-                        img_hash = hashlib.sha256(img_bytes).hexdigest()[:8]
+# 判定（画像がある時だけ実行）
+pred = None
+if img_bytes:
+    # 画像かどうかを事前にチェック（画像以外を選んだ場合はここで弾く）
+    try:
+        from PIL import Image
+        import io
+        Image.open(io.BytesIO(img_bytes))
+    except Exception:
+        st.error("画像として読み込めませんでした（画像ファイルを選択してください）。")
+        img_bytes = b""
+if img_bytes:
+    img_hash = hashlib.sha256(img_bytes).hexdigest()[:8]
                         nonce = st.session_state.pred_nonce.get(tid, 0)
                         pred = classify_image(img_bytes, key=f"pred_{tid}_{img_hash}_{nonce}")
                     info["last_pred"] = pred

@@ -1,10 +1,64 @@
 <!doctype html>
 <html>
 <head>
+
+<script>
+/* Minimal Streamlit Component API shim (no external streamlit-component-lib needed) */
+(function(){
+  const API_VERSION = 1;
+  const RENDER_EVENT = "streamlit:render";
+  const events = new EventTarget();
+  let registered = false;
+  let lastHeight = null;
+
+  function sendBackMsg(type, data){
+    window.parent.postMessage(Object.assign({isStreamlitMessage:true, type:type}, data||{}), "*");
+  }
+
+  function onRenderMessage(data){
+    const args = data && data.args ? data.args : {};
+    const disabled = Boolean(data && data.disabled);
+    const ev = new CustomEvent(RENDER_EVENT, {detail:{args:args, disabled:disabled}});
+    events.dispatchEvent(ev);
+  }
+
+  function onMessageEvent(event){
+    const msg = event.data || {};
+    if(!msg.type) return;
+    if(msg.type === RENDER_EVENT){
+      onRenderMessage(msg);
+    }
+  }
+
+  const Streamlit = {
+    events: events,
+    setComponentReady: function(){
+      if(!registered){
+        window.addEventListener("message", onMessageEvent);
+        registered = true;
+      }
+      sendBackMsg("streamlit:componentReady", {apiVersion: API_VERSION});
+    },
+    setFrameHeight: function(height){
+      if(height === undefined){
+        height = document.body.scrollHeight;
+      }
+      if(height === lastHeight) return;
+      lastHeight = height;
+      sendBackMsg("streamlit:setFrameHeight", {height: height});
+    },
+    setComponentValue: function(value){
+      sendBackMsg("streamlit:setComponentValue", {value: value, dataType: "json"});
+    }
+  };
+
+  window.Streamlit = Streamlit;
+})();
+</script>
+
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <script src="https://unpkg.com/streamlit-component-lib@1.6.0/dist/streamlit-component-lib.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
   <style>
     body { margin: 0; padding: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
     .wrap { padding: 10px; }
