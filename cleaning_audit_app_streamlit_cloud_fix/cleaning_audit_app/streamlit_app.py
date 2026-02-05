@@ -7,6 +7,8 @@ from typing import Dict, Any, List, Optional
 
 import streamlit as st
 import streamlit.components.v1 as components
+import numpy as np
+import tflite_runtime.interpreter as tflite
 
 # =============================
 # 目的:
@@ -48,30 +50,70 @@ ADMIN_PASSWORD = get_admin_password()
 
 # ===== 判定コンポーネント（tm_classifier_component/index.html）=====
 _tm = components.declare_component("tm_classifier", path=os.path.join(os.path.dirname(__file__), "tm_classifier_component"))
+# ===== TFLite 推論（Python側で実行：Streamlit CloudでのJSモデルロード停止対策）=====
+@st.cache_resource
+def _load_tflite_interpreter():
+    model_path = Path(__file__).parent / "static" / "model" / "vww_96_grayscale_quantized.tflite"
+    interpreter = tflite.Interpreter(model_path=str(model_path))
+    interpreter.allocate_tensors()
+    return interpreter
+
+def _read_labels():
+    labels_path = Path(__file__).parent / "static" / "model" / "labels.txt"
+    labels = []
+    for line in labels_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=1)  # "0 perfect"
+        labels.append(parts[1] if len(parts) == 2 else parts[0])
+    return labels
+
+def _preprocess_for_tflite(image_bytes: bytes, input_detail: dict):
+    from PIL import Image
+    import io
+    img = Image.open(io.BytesIO(image_bytes)).convert("L")
+    shape = input_detail.get("shape", [1, 96, 96, 1])
+    h, w = int(shape[1]), int(shape[2])
+    img = img.resize((w, h))
+    arr = np.array(img)
+
+    dtype = input_detail.get("dtype")
+    if dtype == np.uint8:
+        scale, zero_point = input_detail.get("quantization", (0.0, 0))
+        if scale and scale > 0:
+            arr = (arr / scale + zero_point).astype(np.uint8)
+        else:
+            arr = arr.astype(np.uint8)
+    else:
+        arr = (arr.astype(np.float32) / 255.0)
+
+    return arr.reshape(shape)
+
 
 def classify_image(image_bytes: bytes, key: str) -> Optional[List[Dict[str, Any]]]:
-    """Browser-side TFJS component classification.
-    Streamlit Cloud安定動作のため、入力はPNG DataURLに正規化して渡す。
+    """画像バイトを受け取り、TFLiteモデルで perfect/good/bad を推論して返す。
+    返り値は tm_classifier コンポーネント互換の list[dict] 形式。
     """
     if not image_bytes:
         return None
 
-    # 拡張子/実体の違いに強くするため、PILで開ける場合はPNGへ正規化
-    data_url = None
     try:
-        from PIL import Image
-        import io, base64
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        interpreter = _load_tflite_interpreter()
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+
+        x = _preprocess_for_tflite(image_bytes, input_details[0])
+        interpreter.set_tensor(input_details[0]["index"], x)
+        interpreter.invoke()
+        y = interpreter.get_tensor(output_details[0]["index"])[0]
+
+        labels = _read_labels()
+        preds = [{"className": labels[i] if i < len(labels) else str(i), "probability": float(y[i])} for i in range(len(y))]
+        preds.sort(key=lambda d: d.get("probability", 0.0), reverse=True)
+        return preds
     except Exception:
-        # 最終フォールバック（元バイトをそのままjpeg扱いにしない）
         return {"error": "invalid_image"}
-
-    result = _tm(image_data_url=data_url, key=key)
-    return result
-
 # ===== 状態初期化 =====
 def init_state():
     st.session_state.setdefault("roomId", "")

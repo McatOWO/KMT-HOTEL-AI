@@ -2,3 +2,5 @@ Flask==3.0.3
 gunicorn==22.0.0
 streamlit>=1.30
 Pillow
+tflite-runtime
+numpy
