@@ -1,3 +1,0 @@
-0 perfect
-1 good
-2 bad
